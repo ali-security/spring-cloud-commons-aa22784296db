@@ -1,0 +1,95 @@
+# Authored by agentic-sealer: upstream spring-cloud-commons 2.2.x has no GitHub Actions CI
+# (it builds on CircleCI: `./mvnw -s .settings.xml clean install -P sonar ...` on JDK 8).
+# This workflow mirrors that build for the spring-cloud-context reactor slice, with
+# upstream's checkstyle and spring-javaformat validation left on.
+name: seal-build
+
+on:
+  workflow_dispatch:
+    inputs:
+      test-filter:
+        description: "Surefire -Dtest selector; empty runs the full suite"
+        required: false
+        default: ""
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 8
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "8"
+
+      - name: Drop repo.spring.io profile from .mvn/maven.config
+        # maven.config activates `-P spring` (repo.spring.io repositories, now behind auth);
+        # every dependency of this release resolves from Maven Central.
+        run: ": > .mvn/maven.config"
+
+      - name: Build and test (Maven 3.5.0 wrapper)
+        env:
+          TEST_FILTER: ${{ inputs.test-filter }}
+        run: |
+          set -euo pipefail
+          java -version
+          ./mvnw -v
+          COMMON="-B -e -nsu -pl spring-cloud-context,spring-cloud-context-integration-tests,spring-cloud-context-webflux-integration-tests -am \
+            -Dgpg.skip=true -Dmaven.javadoc.skip=true \
+            -Dmaven.test.redirectTestOutputToFile=true \
+            -Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn"
+          if [ -n "${{ inputs.test-filter }}" ]; then
+            ./mvnw $COMMON clean install -Dtest="${{ inputs.test-filter }}" -DfailIfNoTests=false
+          else
+            ./mvnw $COMMON clean install
+          fi
+
+      - name: Test report (per-module totals and skipped tests)
+        if: always()
+        run: |
+          set +x
+          for d in $(find . -type d -path '*/target/surefire-reports' | sort); do
+            python3 - "$d" <<'EOF'
+          import glob, re, sys, xml.etree.ElementTree as ET
+          d = sys.argv[1]
+          mod = d.split("/target/")[0]
+          def src_reason(cls, name):
+              # surefire records no message for a plain @Ignore; quote the annotation from the test source
+              path = "%s/src/test/java/%s.java" % (mod, cls.split("$")[0].replace(".", "/"))
+              try:
+                  lines = open(path, encoding="utf-8").read().splitlines()
+              except OSError:
+                  return "(no message)"
+              for i, l in enumerate(lines):
+                  if re.search(r"\bvoid\s+%s\s*\(" % re.escape(name), l):
+                      for a in reversed(lines[max(0, i - 6):i]):
+                          if "@Ignore" in a or "@Disabled" in a:
+                              return "source annotation: " + a.strip()
+                  if re.search(r"^\s*@Ignore", l) and i + 1 < len(lines) and "class " in lines[i + 1]:
+                      return "class-level source annotation: " + l.strip()
+              return "(no message)"
+          t = f = e = s = 0
+          skipped = []
+          for p in glob.glob(d + "/TEST-*.xml"):
+              r = ET.parse(p).getroot()
+              t += int(r.get("tests", 0)); f += int(r.get("failures", 0))
+              e += int(r.get("errors", 0)); s += int(r.get("skipped", 0))
+              for tc in r.iter("testcase"):
+                  sk = tc.find("skipped")
+                  if sk is not None:
+                      skipped.append("%s.%s: %s" % (tc.get("classname"), tc.get("name"), sk.get("message") or src_reason(tc.get("classname"), tc.get("name"))))
+          print("MODULE %s: tests=%d failures=%d errors=%d skipped=%d passed=%d" % (d, t, f, e, s, t - f - e - s))
+          for x in skipped:
+              print("  SKIPPED " + x)
+          EOF
+          done
+
+      - name: Upload release jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: spring-cloud-context-jar
+          path: spring-cloud-context/target/spring-cloud-context-2.2.6.RELEASE.jar
+          if-no-files-found: error
