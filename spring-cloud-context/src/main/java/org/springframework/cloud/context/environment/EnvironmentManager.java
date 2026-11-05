@@ -61,6 +61,10 @@ public class EnvironmentManager implements ApplicationEventPublisherAware {
 		}
 	}
 
+	/* package */ ConfigurableEnvironment getEnvironment() {
+		return environment;
+	}
+
 	@Override
 	public void setApplicationEventPublisher(ApplicationEventPublisher publisher) {
 		this.publisher = publisher;

@@ -13,6 +13,12 @@
 			"defaultValue": false
 		},
 		{
+			"name": "management.endpoint.env.post.valid-keys-regex",
+			"type": "java.lang.String",
+			"description": "Regex for matching property keys allowed to be changed through a POST to /env. When not set, every key except a built-in list of security-sensitive keys can be changed.",
+			"defaultValue": null
+		},
+		{
 			"name": "management.endpoint.refresh.enabled",
 			"type": "java.lang.Boolean",
 			"description": "Enable the /refresh endpoint to refresh configuration and re-initialize refresh scoped beans.",
